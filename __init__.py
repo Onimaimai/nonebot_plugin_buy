@@ -1,6 +1,9 @@
 import json
+import os
 from nonebot import on_command
 from nonebot.adapters.onebot.v11 import Bot, Event
+from nonebot.permission import SUPERUSER
+from nonebot.adapters.onebot.v11.permission import GROUP_ADMIN, GROUP_OWNER
 from nonebot.typing import T_State
 from nonebot.adapters import Message
 from nonebot.params import CommandArg
@@ -9,11 +12,22 @@ from nonebot.params import CommandArg
 __zx_plugin_name__ = "团购 help"
 
 
-# File to store group-buying data
-data_file = "./data/groupbuy_data.json"
-activity_file = "./data/activity_data.json"
+# 文件路径
+data_dir = "data/buy"
+data_file = os.path.join(data_dir, "groupbuy_data.json")
+activity_file = os.path.join(data_dir, "activity_data.json")
 
-# Load group-buying data
+# 确保数据文件夹存在
+os.makedirs(data_dir, exist_ok=True)
+
+# 创建文件（如果不存在）
+for file_path in [data_file, activity_file]:
+    if not os.path.exists(file_path):
+        with open(file_path, 'w') as f:
+            f.write('{}')
+            
+
+# 加载团购数据
 def load_data():
     try:
         with open(data_file, 'r', encoding='utf-8') as f:
@@ -21,36 +35,49 @@ def load_data():
     except FileNotFoundError:
         return {}
 
-# Save group-buying data
+# 保存团购数据
 def save_data(data):
     with open(data_file, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+# 加载活动数据
+def load_activity_data():
+    try:
+        with open(activity_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+# 保存活动数据
+def save_activity_data(data):
+    with open(activity_file, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
         
-# Help command to show plugin information
+        
 groupbuy_help = on_command("团购 help", aliases={"groupbuyhelp"}, priority=5)
 
 @groupbuy_help.handle()
 async def handle_groupbuy_help(bot: Bot, event: Event):
     help_message = (
+        "团购 help\n"
         "开团 <名称> <成团金额>\n"
         "拼团 <名称> <参与金额>\n"
-        "重置团购 <名称>\n"
-        "删除团购 <名称>\n"
-        "查询团购 <名称>\n"
-        "团购列表\n"
-        "添加活动 <名称>\n"
-        "参加活动 <名称>\n"
-        "重置活动 <名称>\n"
-        "删除活动 <名称>\n"
-        "查询活动 <名称>\n"
+        "查团 <名称>\n"
+        "复团 <名称>\n"
+        "闭团 <名称>\n"
+        "团购列表\n\n"
+        "开趴 <名称>\n"
+        "报名 <名称>\n"
+        "退趴 <名称>\n"
+        "查趴 <名称>\n"
+        "复趴 <名称>\n"
+        "删趴 <名称>\n"
         "活动列表"
     )
     await groupbuy_help.finish(help_message)
         
         
-# Add a new group-buying project
-add_groupbuy = on_command("开团", aliases={"add_groupbuy"}, priority=5)
+add_groupbuy = on_command("添加团购", aliases={"开团"}, priority=5, permission=SUPERUSER | GROUP_ADMIN | GROUP_OWNER)
 
 @add_groupbuy.handle()
 async def handle_add_groupbuy(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
@@ -69,7 +96,7 @@ async def handle_add_groupbuy(bot: Bot, event: Event, state: T_State, args: Mess
         data[group_id] = {}
 
     if project_name in data[group_id]:
-        await add_groupbuy.finish(f"团购项目 '{project_name}' 已存在！")
+        await add_groupbuy.finish(f"团购 '{project_name}' 已存在！")
         return
 
     data[group_id][project_name] = {
@@ -81,8 +108,8 @@ async def handle_add_groupbuy(bot: Bot, event: Event, state: T_State, args: Mess
     save_data(data)
     await add_groupbuy.finish(f"'{project_name}' 开团成功，成团金额为 {target_amount}！")
 
-# Participate in a group-buying project
-participate_groupbuy = on_command("拼团", aliases={"participate_groupbuy"}, priority=5)
+
+participate_groupbuy = on_command("拼团", aliases={"参团"}, priority=5)
 
 @participate_groupbuy.handle()
 async def handle_participate_groupbuy(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
@@ -100,13 +127,12 @@ async def handle_participate_groupbuy(bot: Bot, event: Event, state: T_State, ar
     data = load_data()
 
     if group_id not in data or project_name not in data[group_id]:
-        await participate_groupbuy.finish(f"未找到团购项目 '{project_name}'！")
+        await participate_groupbuy.finish(f"未找到团购 '{project_name}'！")
         return
 
     project = data[group_id][project_name]
 
     if amount == 0:
-        # Remove the participant's record
         if user_id in project['participants']:
             project['total_amount'] -= project['participants'][user_id]['amount']
             del project['participants'][user_id]
@@ -115,7 +141,6 @@ async def handle_participate_groupbuy(bot: Bot, event: Event, state: T_State, ar
         else:
             await participate_groupbuy.finish(f"{nickname} 未参与团购 '{project_name}'！")
     else:
-        # Add or update the participant's record
         if user_id in project['participants']:
             project['total_amount'] -= project['participants'][user_id]['amount']
 
@@ -126,10 +151,9 @@ async def handle_participate_groupbuy(bot: Bot, event: Event, state: T_State, ar
         }
         project['total_amount'] += amount
 
-        # Check if the total amount exceeds the target amount
         if project['total_amount'] == project['target_amount']:
             participant_list = "\n".join(
-                [f"{p['nickname']}：{p['amount']}元" for p in project['participants'].values()])
+                [f"{p['nickname']}\n({p['user_id']})：{p['amount']}元" for p in project['participants'].values()])
             await participate_groupbuy.send(f"团购 '{project_name}' 已成团！参与成员：\n{participant_list}")
         elif project['total_amount'] > project['target_amount']:
             project['total_amount'] -= amount
@@ -140,22 +164,22 @@ async def handle_participate_groupbuy(bot: Bot, event: Event, state: T_State, ar
 
         save_data(data)
 
-# Reset a group-buying project
-reset_groupbuy = on_command("重置团购", aliases={"reset_groupbuy"}, priority=5)
+
+reset_groupbuy = on_command("重置团购", aliases={"复团"}, priority=5, permission=SUPERUSER | GROUP_ADMIN | GROUP_OWNER)
 
 @reset_groupbuy.handle()
 async def handle_reset_groupbuy(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     project_name = args.extract_plain_text().strip()
 
     if not project_name:
-        await reset_groupbuy.finish("请输入团购名称：重置团购 <名称>")
+        await reset_groupbuy.finish("请输入团购名称：复团 <名称>")
         return
     
     group_id = str(event.group_id)
     data = load_data()
 
     if group_id not in data or project_name not in data[group_id]:
-        await reset_groupbuy.finish(f"未找到团购项目 '{project_name}'！")
+        await reset_groupbuy.finish(f"未找到团购 '{project_name}'！")
         return
 
     # Reset the project to initial state
@@ -170,14 +194,14 @@ async def handle_reset_groupbuy(bot: Bot, event: Event, state: T_State, args: Me
     await reset_groupbuy.finish(f"团购 '{project_name}' 已重置！")
 
 # Delete a group-buying project
-delete_groupbuy = on_command("删除团购", aliases={"delete_groupbuy"}, priority=5)
+delete_groupbuy = on_command("删除团购", aliases={"闭团"}, priority=5, permission=SUPERUSER | GROUP_ADMIN | GROUP_OWNER)
 
 @delete_groupbuy.handle()
 async def handle_delete_groupbuy(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     project_name = args.extract_plain_text().strip()
 
     if not project_name:
-        await delete_groupbuy.finish("请输入团购名称：删除团购 <名称>")
+        await delete_groupbuy.finish("请输入团购名称：闭团 <名称>")
         return
     
     group_id = str(event.group_id)
@@ -187,17 +211,15 @@ async def handle_delete_groupbuy(bot: Bot, event: Event, state: T_State, args: M
         await delete_groupbuy.finish(f"未找到团购 '{project_name}'！")
         return
 
-    # Remove the project
     del data[group_id][project_name]
 
-    if not data[group_id]:  # If no projects left in the group, remove the group entry
+    if not data[group_id]:
         del data[group_id]
 
     save_data(data)
     await delete_groupbuy.finish(f"团购 '{project_name}' 已删除！")
 
-# List all group-buying projects in the group
-list_groupbuy = on_command("团购列表", aliases={"list_groupbuy"}, priority=5)
+list_groupbuy = on_command("团购列表", aliases={"团表"}, priority=5)
 
 @list_groupbuy.handle()
 async def handle_list_groupbuy(bot: Bot, event: Event):
@@ -208,18 +230,26 @@ async def handle_list_groupbuy(bot: Bot, event: Event):
         await list_groupbuy.finish("本群尚未添加任何团购。")
         return
 
-    project_list = "\n".join(f"- {name} (成团金额: {info['target_amount']} 元)" for name, info in data[group_id].items())
-    await list_groupbuy.finish(f"本群的团购列表：\n{project_list}")
+    # 只筛选出存在 target_amount 的团购项目
+    project_list = "\n".join(
+        f"- {name} (成团金额: {info['target_amount']} 元)"
+        for name, info in data[group_id].items() if 'target_amount' in info and info['target_amount'] > 0
+    )
 
-# Query details of a specific group-buying project
-query_groupbuy = on_command("查询团购", aliases={"query_groupbuy"}, priority=5)
+    if not project_list:
+        await list_groupbuy.finish("本群没有团购。")
+    else:
+        await list_groupbuy.finish(f"本群的团购：\n{project_list}")
+
+
+query_groupbuy = on_command("查询团购", aliases={"查团"}, priority=5)
 
 @query_groupbuy.handle()
 async def handle_query_groupbuy(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     project_name = args.extract_plain_text().strip()
 
     if not project_name:
-        await query_groupbuy.finish("请输入团购名称：查询团购 <名称>")
+        await query_groupbuy.finish("请输入团购名称：查团 <名称>")
         return
     
     group_id = str(event.group_id)
@@ -249,19 +279,19 @@ async def handle_query_groupbuy(bot: Bot, event: Event, state: T_State, args: Me
     
     
     
-add_activity = on_command("添加活动", aliases={"add_activity"}, priority=5)
+add_activity = on_command("添加活动", aliases={"开趴"}, priority=5, permission=SUPERUSER | GROUP_ADMIN | GROUP_OWNER)
 
 @add_activity.handle()
 async def handle_add_activity(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     args_list = args.extract_plain_text().split()
     if len(args_list) != 1:
-        await add_activity.finish("请输入正确的格式：添加活动 <名称>")
+        await add_activity.finish("请输入正确的格式：开趴 <名称>")
         return
     
     group_id = str(event.group_id)
     activity_name = args_list[0]
 
-    data = load_data()
+    data = load_activity_data()
 
     if group_id not in data:
         data[group_id] = {}
@@ -274,25 +304,25 @@ async def handle_add_activity(bot: Bot, event: Event, state: T_State, args: Mess
         "participants": [],
     }
 
-    save_data(data)
+    save_activity_data(data)
     await add_activity.finish(f"活动 '{activity_name}' 添加成功！")
 
     
-participate_activity = on_command("参加活动", aliases={"participate_activity"}, priority=5)
+participate_activity = on_command("参加活动", aliases={"报名"}, priority=5)
 
 @participate_activity.handle()
 async def handle_participate_activity(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     activity_name = args.extract_plain_text().strip()
 
     if not activity_name:
-        await participate_activity.finish("请输入正确的格式：参加活动 <名称>")
+        await participate_activity.finish("请输入正确的格式：报名 <名称>")
         return
     
     group_id = str(event.group_id)
     user_id = str(event.user_id)
     nickname = event.sender.card if event.sender.card else event.sender.nickname
 
-    data = load_data()
+    data = load_activity_data()
 
     if group_id not in data or activity_name not in data[group_id]:
         await participate_activity.finish(f"未找到活动 '{activity_name}'！")
@@ -303,73 +333,105 @@ async def handle_participate_activity(bot: Bot, event: Event, state: T_State, ar
     if user_id not in activity['participants']:
         activity['participants'].append({"nickname": nickname, "user_id": user_id})
 
-    save_data(data)
+    save_activity_data(data)
     await participate_activity.finish(f"{nickname} 已参加活动 '{activity_name}'！")
 
     
-reset_activity = on_command("重置活动", aliases={"reset_activity"}, priority=5)
+quit_activity = on_command("退出活动", aliases={"退趴"}, priority=5)
+
+@quit_activity.handle()
+async def handle_quit_activity(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
+    activity_name = args.extract_plain_text().strip()
+
+    if not activity_name:
+        await quit_activity.finish("请输入正确的格式：退趴 <名称>")
+        return
+    
+    group_id = str(event.group_id)
+    user_id = str(event.user_id)
+
+    data = load_activity_data()
+
+    if group_id not in data or activity_name not in data[group_id]:
+        await quit_activity.finish(f"未找到活动 '{activity_name}'！")
+        return
+
+    activity = data[group_id][activity_name]
+
+    participants = activity['participants']
+    new_participants = [p for p in participants if p['user_id'] != user_id]
+
+    if len(participants) == len(new_participants):
+        await quit_activity.finish(f"你尚未参加活动 '{activity_name}'！")
+        return
+
+    activity['participants'] = new_participants
+    save_activity_data(data)
+    
+    await quit_activity.finish(f"你已退出活动 '{activity_name}'！")
+    
+    
+reset_activity = on_command("重置活动", aliases={"复趴"}, priority=5, permission=SUPERUSER | GROUP_ADMIN | GROUP_OWNER)
 
 @reset_activity.handle()
 async def handle_reset_activity(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     activity_name = args.extract_plain_text().strip()
 
     if not activity_name:
-        await reset_activity.finish("请输入活动名称：重置活动 <名称>")
+        await reset_activity.finish("请输入活动名称：复趴 <名称>")
         return
     
     group_id = str(event.group_id)
-    data = load_data()
+    data = load_activity_data()
 
     if group_id not in data or activity_name not in data[group_id]:
         await reset_activity.finish(f"未找到活动 '{activity_name}'！")
         return
 
-    # 重置活动
     data[group_id][activity_name]['participants'] = []
 
-    save_data(data)
+    save_activity_data(data)
     await reset_activity.finish(f"活动 '{activity_name}' 已重置！")
 
     
-delete_activity = on_command("删除活动", aliases={"delete_activity"}, priority=5)
+delete_activity = on_command("删除活动", aliases={"删趴"}, priority=5, permission=SUPERUSER | GROUP_ADMIN | GROUP_OWNER)
 
 @delete_activity.handle()
 async def handle_delete_activity(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     activity_name = args.extract_plain_text().strip()
 
     if not activity_name:
-        await delete_activity.finish("请输入活动名称：删除活动 <名称>")
+        await delete_activity.finish("请输入活动名称：删趴 <名称>")
         return
     
     group_id = str(event.group_id)
-    data = load_data()
+    data = load_activity_data()
 
     if group_id not in data or activity_name not in data[group_id]:
         await delete_activity.finish(f"未找到活动 '{activity_name}'！")
         return
 
-    # 删除活动
     del data[group_id][activity_name]
 
     if not data[group_id]:
         del data[group_id]
 
-    save_data(data)
+    save_activity_data(data)
     await delete_activity.finish(f"活动 '{activity_name}' 已删除！")
 
     
-query_activity = on_command("查询活动", aliases={"query_activity"}, priority=5)
+query_activity = on_command("查询活动", aliases={"查趴"}, priority=5)
 
 @query_activity.handle()
 async def handle_query_activity(bot: Bot, event: Event, state: T_State, args: Message = CommandArg()):
     activity_name = args.extract_plain_text().strip()
 
     if not activity_name:
-        await query_activity.finish("请输入活动名称：查询活动 <名称>")
+        await query_activity.finish("请输入活动名称：查趴 <名称>")
         return
     
     group_id = str(event.group_id)
-    data = load_data()
+    data = load_activity_data()
 
     if group_id not in data or activity_name not in data[group_id]:
         await query_activity.finish(f"未找到活动 '{activity_name}'！")
@@ -384,16 +446,24 @@ async def handle_query_activity(bot: Bot, event: Event, state: T_State, args: Me
     await query_activity.finish(response)
 
     
-list_activity = on_command("活动列表", aliases={"list_activity"}, priority=5)
+list_activity = on_command("活动列表", aliases={"趴表"}, priority=5)
 
 @list_activity.handle()
 async def handle_list_activity(bot: Bot, event: Event):
     group_id = str(event.group_id)
-    data = load_data()
+    data = load_activity_data()
 
     if group_id not in data or not data[group_id]:
         await list_activity.finish("本群尚未添加任何活动。")
         return
 
-    activity_list = "\n".join(f"- {name}" for name in data[group_id].keys())
-    await list_activity.finish(f"本群的活动列表：\n{activity_list}")
+    activity_list = "\n".join(
+        f"- {name}"
+        for name, info in data[group_id].items() if 'target_amount' not in info
+    )
+
+    if not activity_list:
+        await list_activity.finish("本群没有活动。")
+    else:
+        await list_activity.finish(f"本群的活动：\n{activity_list}")
+
